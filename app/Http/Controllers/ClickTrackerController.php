@@ -65,22 +65,28 @@ class ClickTrackerController extends Controller
             $queryParams = $request->query();
             $landingPage = $campaignLink->landing_page;
 
-            // Check if landing page already has query parameters
+            // Parse the landing page URL
             $parsedUrl = parse_url($landingPage);
-            if (isset($parsedUrl['query'])) {
-                // Landing page already has query parameters, append with &
-                $landingPage .= '&' . http_build_query($queryParams);
-            } else {
-                // Landing page does not have query parameters, add them with ?
-                $landingPage .= '?' . http_build_query($queryParams);
+
+            // Build the query string for the landing page
+            $queryString = isset($parsedUrl['query']) ? $parsedUrl['query'] : '';
+
+            // Append the original query parameters to the landing page query string
+            foreach ($queryParams as $key => $value) {
+                if (!empty($queryString)) {
+                    $queryString .= '&';
+                }
+                $queryString .= urlencode($key) . '=' . urlencode($value);
             }
 
-            // Check if there are multiple ?
-            if (substr_count($landingPage, '?') > 1) {
-                $landingPage = preg_replace('/&/', '?', $landingPage, 1);
-            }
+            // Reconstruct the landing page URL with the new query string
+            $landingPageWithParams = isset($parsedUrl['scheme']) ? $parsedUrl['scheme'] . '://' : '';
+            $landingPageWithParams .= isset($parsedUrl['host']) ? $parsedUrl['host'] : '';
+            $landingPageWithParams .= isset($parsedUrl['path']) ? $parsedUrl['path'] : '';
+            $landingPageWithParams .= !empty($queryString) ? '?' . $queryString : '';
+            $landingPageWithParams .= isset($parsedUrl['fragment']) ? '#' . $parsedUrl['fragment'] : '';
 
-            return redirect()->away($landingPage);
+            return redirect()->away($landingPageWithParams);
         }
 
         // Log the error to the database if click save fails
