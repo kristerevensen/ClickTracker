@@ -61,7 +61,26 @@ class ClickTrackerController extends Controller
 
         // Save the click and redirect to the landing page if successful
         if ($click->save()) {
-            return redirect()->away($campaignLink->landing_page);
+            // Extract the parameters from the request URL
+            $queryParams = $request->query();
+            $landingPage = $campaignLink->landing_page;
+
+            // Check if landing page already has query parameters
+            $parsedUrl = parse_url($landingPage);
+            if (isset($parsedUrl['query'])) {
+                // Landing page already has query parameters, append with &
+                $landingPage .= '&' . http_build_query($queryParams);
+            } else {
+                // Landing page does not have query parameters, add them with ?
+                $landingPage .= '?' . http_build_query($queryParams);
+            }
+
+            // Check if there are multiple ?
+            if (substr_count($landingPage, '?') > 1) {
+                $landingPage = preg_replace('/&/', '?', $landingPage, 1);
+            }
+
+            return redirect()->away($landingPage);
         }
 
         // Log the error to the database if click save fails
