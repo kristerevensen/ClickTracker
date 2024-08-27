@@ -5,7 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\CampaignLink;
 use App\Models\CampaignLinkClick;
-use App\Models\ErrorLog; // Import the ErrorLog model
+use App\Models\ErrorLog;
 use DeviceDetector\DeviceDetector;
 use DeviceDetector\Parser\Device\AbstractDeviceParser;
 
@@ -18,10 +18,7 @@ class ClickTrackerController extends Controller
 
         // Check if linkToken is provided and valid
         if (empty($linkToken)) {
-            // Log the error to the database
             $this->logError('Invalid link token provided.', $linkToken, $request);
-
-            // Redirect to a page saying the link is invalid
             return redirect()->route('invalid.link');
         }
 
@@ -29,12 +26,12 @@ class ClickTrackerController extends Controller
         $campaignLink = CampaignLink::where('link_token', $linkToken)->first();
 
         if (!$campaignLink) {
-            // Log the error to the database
             $this->logError('Campaign link not found.', $linkToken, $request);
-
-            // Redirect to a page saying the link is invalid
             return redirect()->route('invalid.link');
         }
+
+        // Retrieve the associated campaign
+        $campaign = $campaignLink->campaign;
 
         // Use DeviceDetector to parse the user agent
         AbstractDeviceParser::setVersionTruncation(AbstractDeviceParser::VERSION_TRUNCATION_NONE);
@@ -42,9 +39,9 @@ class ClickTrackerController extends Controller
         $dd = new DeviceDetector($request->userAgent());
         $dd->parse();
 
-        $browser = $dd->getClient(); // Returns an array with 'name', 'version'
-        $os = $dd->getOs(); // Returns an array with 'name', 'version'
-        $device = $dd->getDeviceName(); // Device type: desktop, smartphone, etc.
+        $browser = $dd->getClient();
+        $os = $dd->getOs();
+        $device = $dd->getDeviceName();
 
         // Store the click data
         $click = new CampaignLinkClick();
@@ -54,49 +51,46 @@ class ClickTrackerController extends Controller
         $click->platform = $os['name'] ?? null;
         $click->browser = $browser['name'] ?? null;
         $click->device_type = $device;
-        $click->screen_resolution = $request->headers->get('screen-resolution'); // Assume client sends this
+        $click->screen_resolution = $request->headers->get('screen-resolution');
         $click->language = $request->headers->get('accept-language');
         $click->session_id = $request->session()->getId();
         $click->link_token = $linkToken;
 
         // Save the click and redirect to the landing page if successful
         if ($click->save()) {
-
-            // Extract the parameters from the request URL
-            $queryParams = $request->query();
             $landingPage = $campaignLink->landing_page;
+            $queryParams = $request->query();
 
-            // Build UTM parameters
-            $utmParams = [
-                'utm_campaign' => str_replace(' ', '_', strtolower($campaignLink->campaign->name)),
-                'utm_source' => str_replace(' ', '_', strtolower($campaignLink->source)),
-                'utm_medium' => str_replace(' ', '_', strtolower($campaignLink->medium)),
-                'utm_content' => str_replace(' ', '_', strtolower($campaignLink->content)),
-            ];
+            // Only append UTM parameters if utm_activated is true
+            if ($campaign->utm_activated) {
+                $utmParams = [
+                    'utm_campaign' => $campaign->force_lowercase ? str_replace(' ', '_', strtolower($campaign->campaign_name)) : str_replace(' ', '_', $campaign->campaign_name),
+                    'utm_source' => $campaign->force_lowercase ? str_replace(' ', '_', strtolower($campaignLink->source)) : str_replace(' ', '_', $campaignLink->source),
+                    'utm_medium' => $campaign->force_lowercase ? str_replace(' ', '_', strtolower($campaignLink->medium)) : str_replace(' ', '_', $campaignLink->medium),
+                    'utm_content' => $campaign->force_lowercase ? str_replace(' ', '_', strtolower($campaignLink->content)) : str_replace(' ', '_', $campaignLink->content),
+                ];
 
-            // Merge UTM parameters with existing query parameters
-            $allParams = array_merge($queryParams, $utmParams);
+                // Merge UTM parameters with any existing query parameters
+                $allParams = array_merge($queryParams, $utmParams);
+            } else {
+                $allParams = $queryParams;
+            }
 
             // Parse the landing page URL
             $parsedUrl = parse_url($landingPage);
-
-            // Build the query string for the landing page
             $queryString = http_build_query($allParams);
 
-            // Reconstruct the landing page URL with the new query string
-            $landingPageWithParams = isset($parsedUrl['scheme']) ? $parsedUrl['scheme'] . '://' : '';
-            $landingPageWithParams .= isset($parsedUrl['host']) ? $parsedUrl['host'] : '';
-            $landingPageWithParams .= isset($parsedUrl['path']) ? $parsedUrl['path'] : '';
-            $landingPageWithParams .= !empty($queryString) ? '?' . $queryString : '';
-            $landingPageWithParams .= isset($parsedUrl['fragment']) ? '#' . $parsedUrl['fragment'] : '';
+            // Reconstruct the landing page URL with proper query parameters
+            $landingPageWithParams = (isset($parsedUrl['scheme']) ? $parsedUrl['scheme'] . '://' : '')
+                . (isset($parsedUrl['host']) ? $parsedUrl['host'] : '')
+                . (isset($parsedUrl['path']) ? $parsedUrl['path'] : '')
+                . (!empty($queryString) ? '?' . $queryString : '')
+                . (isset($parsedUrl['fragment']) ? '#' . $parsedUrl['fragment'] : '');
 
             return redirect()->away($landingPageWithParams);
         }
 
-        // Log the error to the database if click save fails
         $this->logError('Failed to save campaign link click.', $linkToken, $request);
-
-        // Redirect to an error page
         return redirect()->route('error.page')->with('message', 'Failed to process the click. Please try again later.');
     }
 
@@ -109,10 +103,8 @@ class ClickTrackerController extends Controller
      */
     private function logError(string $errorMessage, ?string $linkToken, Request $request): void
     {
-        // Serialize the stack trace as a JSON string
         $stackTrace = json_encode(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS));
 
-        // Create a new error log entry
         ErrorLog::create([
             'link_token' => $linkToken,
             'error_message' => $errorMessage,
