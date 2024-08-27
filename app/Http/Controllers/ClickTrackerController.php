@@ -33,6 +33,18 @@ class ClickTrackerController extends Controller
         // Retrieve the associated campaign
         $campaign = $campaignLink->campaign;
 
+        // Check if the campaign is active
+        if (!$campaign->status) {
+            $this->logError('Campaign is inactive.', $linkToken, $request);
+            return redirect()->route('invalid.link');
+        }
+
+        // Check if the campaign has an end date and if it has passed
+        if ($campaign->end && now()->greaterThan($campaign->end)) {
+            $this->logError('Campaign has expired.', $linkToken, $request);
+            return redirect()->route('invalid.link');
+        }
+
         // Use DeviceDetector to parse the user agent
         AbstractDeviceParser::setVersionTruncation(AbstractDeviceParser::VERSION_TRUNCATION_NONE);
 
@@ -59,32 +71,70 @@ class ClickTrackerController extends Controller
         // Save the click and redirect to the landing page if successful
         if ($click->save()) {
             $landingPage = $campaignLink->landing_page;
-            $queryParams = $request->query();
+            $queryParams = $request->query(); // Existing query parameters
 
-            // Only append UTM parameters if utm_activated is true
+            // If UTM is activated, prepare UTM parameters
+            $utmParams = [];
             if ($campaign->utm_activated) {
-                $utmParams = [
-                    'utm_campaign' => $campaign->force_lowercase ? str_replace(' ', '_', strtolower($campaign->campaign_name)) : str_replace(' ', '_', $campaign->campaign_name),
-                    'utm_source' => $campaign->force_lowercase ? str_replace(' ', '_', strtolower($campaignLink->source)) : str_replace(' ', '_', $campaignLink->source),
-                    'utm_medium' => $campaign->force_lowercase ? str_replace(' ', '_', strtolower($campaignLink->medium)) : str_replace(' ', '_', $campaignLink->medium),
-                    'utm_content' => $campaign->force_lowercase ? str_replace(' ', '_', strtolower($campaignLink->content)) : str_replace(' ', '_', $campaignLink->content),
-                ];
+                if (!empty($campaign->campaign_name)) {
+                    $utmParams['utm_campaign'] = $campaign->force_lowercase
+                        ? str_replace(' ', '_', strtolower($campaign->campaign_name))
+                        : str_replace(' ', '_', $campaign->campaign_name);
+                }
 
-                // Merge UTM parameters with any existing query parameters
-                $allParams = array_merge($queryParams, $utmParams);
-            } else {
-                $allParams = $queryParams;
+                if (!empty($campaignLink->source)) {
+                    $utmParams['utm_source'] = $campaign->force_lowercase
+                        ? str_replace(' ', '_', strtolower($campaignLink->source))
+                        : str_replace(' ', '_', $campaignLink->source);
+                }
+
+                if (!empty($campaignLink->medium)) {
+                    $utmParams['utm_medium'] = $campaign->force_lowercase
+                        ? str_replace(' ', '_', strtolower($campaignLink->medium))
+                        : str_replace(' ', '_', $campaignLink->medium);
+                }
+
+                if (!empty($campaignLink->content)) {
+                    $utmParams['utm_content'] = $campaign->force_lowercase
+                        ? str_replace(' ', '_', strtolower($campaignLink->content))
+                        : str_replace(' ', '_', $campaignLink->content);
+                }
             }
+
+            // Handle custom parameters with additional whitespace removal
+            $customParams = [];
+            if (!empty($campaignLink->custom_parameters)) {
+                $customParamsArray = explode(',', $campaignLink->custom_parameters);
+                foreach ($customParamsArray as $param) {
+                    $keyValue = explode('=', $param);
+                    if (count($keyValue) === 2) {
+                        $key = trim(str_replace(' ', '', $keyValue[0])); // Remove spaces from key
+                        $value = trim(str_replace(' ', '', $keyValue[1])); // Remove spaces from value
+                        $customParams[$key] = $campaign->force_lowercase
+                            ? strtolower($value)
+                            : $value;
+                    }
+                }
+            }
+
+            // Merge existing query parameters, UTM parameters, and custom parameters
+            $allParams = array_merge($queryParams, $utmParams, $customParams);
 
             // Parse the landing page URL
             $parsedUrl = parse_url($landingPage);
-            $queryString = http_build_query($allParams);
+
+            // Handle the query string, preserving existing ones and appending new ones
+            $existingQueryString = isset($parsedUrl['query']) ? $parsedUrl['query'] : '';
+            $newQueryString = http_build_query($allParams);
+
+            // Combine existing and new query strings
+            $finalQueryString = trim($existingQueryString . '&' . $newQueryString, '&');
 
             // Reconstruct the landing page URL with proper query parameters
             $landingPageWithParams = (isset($parsedUrl['scheme']) ? $parsedUrl['scheme'] . '://' : '')
                 . (isset($parsedUrl['host']) ? $parsedUrl['host'] : '')
                 . (isset($parsedUrl['path']) ? $parsedUrl['path'] : '')
-                . (!empty($queryString) ? '?' . $queryString : '')
+                . (!empty($finalQueryString) ? '?' . $finalQueryString : '')
                 . (isset($parsedUrl['fragment']) ? '#' . $parsedUrl['fragment'] : '');
 
             return redirect()->away($landingPageWithParams);
