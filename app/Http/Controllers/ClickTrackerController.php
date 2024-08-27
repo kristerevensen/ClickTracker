@@ -61,23 +61,27 @@ class ClickTrackerController extends Controller
 
         // Save the click and redirect to the landing page if successful
         if ($click->save()) {
+
             // Extract the parameters from the request URL
             $queryParams = $request->query();
             $landingPage = $campaignLink->landing_page;
+
+            // Build UTM parameters
+            $utmParams = [
+                'utm_campaign' => str_replace(' ', '_', strtolower($campaignLink->campaign->name)),
+                'utm_source' => str_replace(' ', '_', strtolower($campaignLink->source)),
+                'utm_medium' => str_replace(' ', '_', strtolower($campaignLink->medium)),
+                'utm_content' => str_replace(' ', '_', strtolower($campaignLink->content)),
+            ];
+
+            // Merge UTM parameters with existing query parameters
+            $allParams = array_merge($queryParams, $utmParams);
 
             // Parse the landing page URL
             $parsedUrl = parse_url($landingPage);
 
             // Build the query string for the landing page
-            $queryString = isset($parsedUrl['query']) ? $parsedUrl['query'] : '';
-
-            // Append the original query parameters to the landing page query string
-            foreach ($queryParams as $key => $value) {
-                if (!empty($queryString)) {
-                    $queryString .= '&';
-                }
-                $queryString .= urlencode($key) . '=' . urlencode($value);
-            }
+            $queryString = http_build_query($allParams);
 
             // Reconstruct the landing page URL with the new query string
             $landingPageWithParams = isset($parsedUrl['scheme']) ? $parsedUrl['scheme'] . '://' : '';
